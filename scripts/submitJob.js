@@ -26,12 +26,14 @@ client.on('data', (d) => framer.feed(d));
 
 client.connect(port, host, () => {
   console.log('[CLIENT] Connected. Submitting JOB_START...');
+  const stageDelayMs = parseInt(process.env.STAGE_DELAY_MS || process.argv[5] || '0', 10);
   const msg = createMessage(MessageType.JOB_START, {
     payload: {
       jobType,
       csvPath: process.argv[3] || 'data/input/transactions.csv',
       groundTruthPath: process.argv[4] || 'fraud/expectedRings.json',
-      numPartitions: 4
+      numPartitions: 4,
+      stageDelayMs
     }
   });
   client.write(MessageFramer.frame(msg));

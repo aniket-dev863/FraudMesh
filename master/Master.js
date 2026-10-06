@@ -156,7 +156,7 @@ export class Master {
         }
         this.scheduler.schedulePendingTasks();
       case MessageType.JOB_START: {
-        const { jobType, csvPath, groundTruthPath, numPartitions } = payload || {};
+        const { jobType, csvPath, groundTruthPath, numPartitions, stageDelayMs } = payload || {};
         console.log(`[MASTER] Received TCP request to start job: ${jobType}`);
         (async () => {
           try {
@@ -167,7 +167,8 @@ export class Master {
               res = await this.runFraudMining({
                 transactionsCsvPath: csvPath || 'data/input/transactions.csv',
                 groundTruthJsonPath: groundTruthPath || 'fraud/expectedRings.json',
-                numPartitions: numPartitions || 4
+                numPartitions: numPartitions || 4,
+                stageDelayMs: stageDelayMs || 0
               });
             }
             socket.write(MessageFramer.frame(createMessage(MessageType.JOB_COMPLETE, { payload: res })));
@@ -199,7 +200,10 @@ export class Master {
     }
   }
 
-  async runStage(tasks) {
+  async runStage(tasks, stageDelayMs = 0) {
+    if (stageDelayMs > 0) {
+      await new Promise(r => setTimeout(r, stageDelayMs));
+    }
     return new Promise((resolve, reject) => {
       this.taskManager.clear();
       this.taskManager.addTasks(tasks);
@@ -281,13 +285,17 @@ export class Master {
   async runFraudMining({
     transactionsCsvPath,
     groundTruthJsonPath = 'fraud/expectedRings.json',
-    numPartitions = 4
+    numPartitions = 4,
+    stageDelayMs = 0
   }) {
     this.jobActive = true;
     const startTime = Date.now();
     const jobId = `fraud-${Date.now()}`;
     console.log(`[MASTER] =========================================`);
     console.log(`[MASTER] STARTING FRAUD MINING JOB: ${jobId}`);
+    if (stageDelayMs > 0) {
+      console.log(`[MASTER] (Demo Pace Active: ${stageDelayMs}ms delay between stages)`);
+    }
     console.log(`[MASTER] =========================================`);
 
     // Parse CSV transactions
@@ -327,7 +335,7 @@ export class Master {
       }
     }
 
-    const mapResults = await this.runStage(mapTasks);
+    const mapResults = await this.runStage(mapTasks, stageDelayMs);
     const edgeList = [];
     const nodeNeighbors = new Map();
 
@@ -380,7 +388,7 @@ export class Master {
         }
       }
 
-      const ccMapResults = await this.runStage(ccMapTasks);
+      const ccMapResults = await this.runStage(ccMapTasks, stageDelayMs);
       const ccEmits = [];
       for (const res of ccMapResults.values()) {
         if (res.emits) ccEmits.push(...res.emits);
@@ -401,7 +409,7 @@ export class Master {
         meta: { currentLabels: currentLabelsObj }
       }));
 
-      const ccReduceResults = await this.runStage(ccReduceTasks);
+      const ccReduceResults = await this.runStage(ccReduceTasks, stageDelayMs);
       let anyChanged = false;
       for (const res of ccReduceResults.values()) {
         if (res.anyChanged) anyChanged = true;
@@ -456,7 +464,7 @@ export class Master {
       }
     }
 
-    const sccResults = await this.runStage(sccTasks);
+    const sccResults = await this.runStage(sccTasks, stageDelayMs);
     const detectedRings = [];
     for (const res of sccResults.values()) {
       for (const r of (res.rings || [])) {
