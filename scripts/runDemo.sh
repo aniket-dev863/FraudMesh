@@ -38,7 +38,7 @@ echo "  TASK REASSIGNED"
 echo "  ACCEPTED result"
 echo "========================================="
 
-node scripts/submitJob.js fraud
+MASTER_PORT=5050 node scripts/submitJob.js fraud
 
 echo ""
 echo "[DEMO COMPLETE] Detected rings in data/output/detected_rings.json:"
