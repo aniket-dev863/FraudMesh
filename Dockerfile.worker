@@ -1,0 +1,15 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+
+COPY common/ ./common/
+COPY fraud/ ./fraud/
+COPY worker/ ./worker/
+
+ENV NODE_ENV=production
+ENV MASTER_HOST=master
+ENV MASTER_PORT=5050
+
+CMD ["node", "worker/main.js"]

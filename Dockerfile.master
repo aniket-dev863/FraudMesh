@@ -1,0 +1,18 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+# No external dependencies are required as Node 20 built-ins (net, os, fs, node:test) are used
+
+COPY common/ ./common/
+COPY fraud/ ./fraud/
+COPY master/ ./master/
+COPY scripts/ ./scripts/
+
+EXPOSE 5050
+
+ENV NODE_ENV=production
+ENV MASTER_PORT=5050
+
+CMD ["node", "master/main.js"]

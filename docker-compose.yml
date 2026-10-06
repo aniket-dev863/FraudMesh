@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  master:
+    build:
+      context: .
+      dockerfile: Dockerfile.master
+    container_name: fraudmesh-master
+    ports:
+      - "5050:5050"
+    environment:
+      - MASTER_PORT=5050
+      - HEARTBEAT_INTERVAL_MS=2000
+      - HEARTBEAT_MISSES_ALLOWED=3
+      - SPECULATION_ENABLED=true
+      - SPECULATION_MULTIPLIER=2.0
+      - SKEW_ENABLED=true
+      - SKEW_THRESHOLD=2.0
+      - MAX_CC_ITERATIONS=100
+      - LOG_LEVEL=info
+    volumes:
+      - ./data:/app/data
+      - ./fraud/expectedRings.json:/app/fraud/expectedRings.json
+    networks:
+      - fraudmesh-net
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      - MASTER_HOST=master
+      - MASTER_PORT=5050
+      - HEARTBEAT_INTERVAL_MS=2000
+      - WORKER_SLOWDOWN_MS=0
+      - LOG_LEVEL=info
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - master
+    networks:
+      - fraudmesh-net
+
+networks:
+  fraudmesh-net:
+    driver: bridge

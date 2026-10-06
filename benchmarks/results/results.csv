@@ -1,0 +1,5 @@
+experiment,workers,datasetRows,durationMs,throughput,correctness,tasksReexecuted,speculativeAttempts,rebalances
+Baseline (All Optimizations OFF),4,2000,53,37736,PASS,0,0,0
+Fault Tolerance Enabled,4,2000,23,86957,PASS,0,0,0
+Skew-Aware Rebalancing ON,4,2000,25,80000,PASS,0,0,0
+Speculation ON (with straggler mitigation),4,2000,4056,493,PASS,0,0,0

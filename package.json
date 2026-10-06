@@ -1,0 +1,23 @@
+{
+  "name": "fraudmesh",
+  "version": "0.7.0",
+  "description": "Fault-Tolerant, Skew-Aware MapReduce Engine for Distributed Fraud-Ring Mining over Commodity Clusters",
+  "type": "module",
+  "main": "master/main.js",
+  "scripts": {
+    "start:master": "node master/main.js",
+    "start:worker": "node worker/main.js",
+    "test": "node --test tests/*.test.js",
+    "generate-data": "node fraud/generateDataset.js",
+    "benchmark": "node benchmarks/runBenchmark.js"
+  },
+  "keywords": [
+    "mapreduce",
+    "distributed-systems",
+    "fault-tolerance",
+    "fraud-detection",
+    "graph-mining"
+  ],
+  "author": "",
+  "license": "ISC"
+}

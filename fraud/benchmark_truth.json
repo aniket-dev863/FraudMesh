@@ -1,0 +1,15 @@
+{
+  "rings": [
+    [
+      "ACC_RING1_A",
+      "ACC_RING1_B",
+      "ACC_RING1_C"
+    ],
+    [
+      "ACC_RING2_D",
+      "ACC_RING2_E",
+      "ACC_RING2_F",
+      "ACC_RING2_G"
+    ]
+  ]
+}

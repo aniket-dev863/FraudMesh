@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+*.log
+data/output/*
+!data/output/.gitkeep
+scratch/
