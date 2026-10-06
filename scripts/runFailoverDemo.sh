@@ -2,53 +2,56 @@
 set -e
 
 echo "==========================================================="
-echo "   FRAUDMESH AUTOMATED PREDICTED FAILOVER DEMO"
+echo "   FRAUDMESH PREDICTED FAILOVER & RECOVERY DEMO"
 echo "==========================================================="
 
-# 1. Clean and generate dataset
+# 1. Clean output
 rm -rf data/output/*
 mkdir -p data/input data/output
 node fraud/generateDataset.js --rows 1200 --seed 42
 
-# 2. Start 4-worker cluster
+# 2. Restart cluster with workers having 1500ms task pacing
+echo "[CLUSTER] Launching 1 Master + 4 Workers..."
 docker compose down --remove-orphans
 docker compose up --build -d --scale worker=4
 
-echo "Waiting 6 seconds for workers to register..."
+echo "Waiting 6 seconds for workers to connect and register..."
 sleep 6
 
-# Pick target worker container to kill
-TARGET_WORKER=$(docker ps --filter "name=worker" --format "{{.Names}}" | grep -v master | head -n 1)
+TARGET_CONTAINER=$(docker ps --filter "name=worker" --format "{{.Names}}" | grep -v master | head -n 1)
 
 echo ""
 echo "==========================================================="
-echo " TARGET WORKER TO BE KILLED: $TARGET_WORKER"
-echo " (In your other terminal, run: docker compose logs -f master)"
+echo " TARGET CONTAINER TO KILL: $TARGET_CONTAINER"
+echo " WATCH YOUR OTHER TERMINAL FOR LIVE MASTER LOGS:"
+echo "   docker compose logs -f master"
 echo "==========================================================="
 echo ""
 
-# 3. Start fraud job in background
+# 3. Launch job in background
 MASTER_PORT=5050 node scripts/submitJob.js fraud &
 JOB_PID=$!
 
-# 4. Wait for job to start executing tasks
-echo "[DEMO] Job running... Waiting 2 seconds before killing worker..."
-sleep 2
+# 4. Wait 1 second so tasks are actively assigned and running on workers
+sleep 1
 
-# 5. Automatically kill the target worker mid-flight
 echo ""
-echo ">>> [DEMO KILL TRIGGER] KILLING $TARGET_WORKER NOW! <<<"
-docker stop -t 0 "$TARGET_WORKER"
-echo ">>> $TARGET_WORKER terminated! Master will detect heartbeat timeout & reassign task."
+echo ">>> [TRIGGERING KILL] STOPPING $TARGET_CONTAINER MID-TASK! <<<"
+docker stop -t 0 "$TARGET_CONTAINER"
+echo ">>> $TARGET_CONTAINER killed! Watch master terminal for:"
+echo "    - [MASTER] TCP connection abruptly closed / WORKER FAILED"
+echo "    - [MASTER] Requeueing task ..."
+echo "    - [MASTER] Assigning ...-attempt-2 -> surviving worker"
+echo "    - [MASTER] ACCEPTED result ..."
 echo ""
 
-# 6. Wait for job to finish recovering
+# 5. Wait for the master to recover and finish the job
 wait $JOB_PID
 
 echo ""
 echo "==========================================================="
-echo " [DEMO COMPLETE] Master recovered and completed successfully!"
-echo " Detected rings in data/output/detected_rings.json:"
+echo " FAILOVER DEMO COMPLETED SUCCESSFULLY!"
+echo " Final Detected Fraud Rings in data/output/detected_rings.json:"
 cat data/output/detected_rings.json
 echo ""
 echo "==========================================================="

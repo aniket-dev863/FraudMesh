@@ -32,7 +32,7 @@ services:
       - MASTER_HOST=master
       - MASTER_PORT=5050
       - HEARTBEAT_INTERVAL_MS=2000
-      - WORKER_SLOWDOWN_MS=0
+      - WORKER_SLOWDOWN_MS=1500
       - LOG_LEVEL=info
     volumes:
       - ./data:/app/data

@@ -76,7 +76,10 @@ export class Master {
         if (currentWorkerId) {
           const w = this.workerRegistry.get(currentWorkerId);
           if (w && w.status !== WorkerStatus.DEAD) {
-            console.log(`[MASTER] TCP connection closed for ${currentWorkerId}`);
+            console.log(`[MASTER] TCP connection abruptly closed for ${currentWorkerId}`);
+            console.log(`[MASTER] WORKER FAILED ${currentWorkerId}`);
+            this.workerRegistry.markDead(currentWorkerId);
+            this.handleWorkerFailure(currentWorkerId);
           }
         }
       });
