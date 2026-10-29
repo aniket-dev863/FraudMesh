@@ -72,8 +72,8 @@ export async function runCCDriver({
   const allNodes = Array.from(nodeSet);
   const numNodes = allNodes.length;
 
-  // Max-rounds guard: 10 * ceil(log2(max(2, n))) + 20
-  const maxRoundsGuard = maxRounds || (10 * Math.ceil(Math.log2(Math.max(2, numNodes))) + 20);
+  // Max-rounds guard: 25 * ceil(log2(max(2, n))) + 50
+  const maxRoundsGuard = maxRounds || (25 * Math.ceil(Math.log2(Math.max(2, numNodes))) + 50);
 
   // Initialize clusters: C_v = {v} ∪ Γ(v)
   let clusters = new Map();

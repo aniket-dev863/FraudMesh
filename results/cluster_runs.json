@@ -1,0 +1,26 @@
+[
+  {
+    "algorithm": "hash_to_min",
+    "workers": 4,
+    "inputRecords": 2000,
+    "wallTimeMs": 65,
+    "ringsCount": 2,
+    "rings": [
+      "ACC_RING1_A,ACC_RING1_B,ACC_RING1_C",
+      "ACC_RING2_D,ACC_RING2_E,ACC_RING2_F,ACC_RING2_G"
+    ],
+    "correctness": "PASS"
+  },
+  {
+    "algorithm": "hash_greater_to_min",
+    "workers": 4,
+    "inputRecords": 2000,
+    "wallTimeMs": 112,
+    "ringsCount": 2,
+    "rings": [
+      "ACC_RING1_A,ACC_RING1_B,ACC_RING1_C",
+      "ACC_RING2_D,ACC_RING2_E,ACC_RING2_F,ACC_RING2_G"
+    ],
+    "correctness": "PASS"
+  }
+]
