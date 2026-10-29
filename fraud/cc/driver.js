@@ -4,7 +4,6 @@ import { OrderContext } from './ordering.js';
 import { HashToMinAlgorithm } from './hash_to_min.js';
 import { HashGreaterToMinAlgorithm } from './hash_greater_to_min.js';
 import { Task, TaskType } from '../../common/models.js';
-import { MessageType } from '../../common/protocol.js';
 import { ShuffleManager } from '../../master/ShuffleManager.js';
 
 export function resolveAlgorithm(algorithmOrName) {
@@ -20,6 +19,10 @@ export function resolveAlgorithm(algorithmOrName) {
 
 /**
  * Driver executing connected-components rounds (local in-process or distributed via Master).
+ *
+ * For Hash-to-Min: every round uses the same map/reduce.
+ * For Hash-Greater-to-Min (Alternating): repeats a 3-round cycle
+ *   (Hma, Hma, Hcm) as specified by the paper.
  */
 export async function runCCDriver({
   algorithm = 'hash_to_min',
@@ -41,6 +44,7 @@ export async function runCCDriver({
 } = {}) {
   const algo = resolveAlgorithm(algorithm);
   const orderContext = new OrderContext(orderMode, seed);
+  const isAlternating = (algo.name === 'hash_greater_to_min');
 
   // Normalize graph nodes and undirected adjacency
   const nodeSet = new Set(nodes);
@@ -64,7 +68,6 @@ export async function runCCDriver({
       }
     }
   }
-  // If adjacency was directed/bidirectional, undirected edges = edgeCount / 2
   const numEdges = Math.round(edgeCount / 2);
   const allNodes = Array.from(nodeSet);
   const numNodes = allNodes.length;
@@ -72,7 +75,7 @@ export async function runCCDriver({
   // Max-rounds guard: 10 * ceil(log2(max(2, n))) + 20
   const maxRoundsGuard = maxRounds || (10 * Math.ceil(Math.log2(Math.max(2, numNodes))) + 20);
 
-  // Initialize clusters: C_v = {v} U Gamma(v)
+  // Initialize clusters: C_v = {v} ∪ Γ(v)
   let clusters = new Map();
   for (const node of allNodes) {
     clusters.set(node, new Set(adjMap.get(node) || [node]));
@@ -86,14 +89,40 @@ export async function runCCDriver({
     round++;
     const roundStartTime = performance.now();
 
-    let emittedPairs = [];
-    let mapRecords = allNodes.length;
+    // Determine round type for alternating scheme
+    let roundType = 'htm'; // default for hash_to_min
+    if (isAlternating) {
+      roundType = algo.getRoundType(round); // 'hma' or 'hcm'
+    }
 
-    if (executionMode === 'distributed' && master) {
-      // --- Distributed Execution via Master ---
+    let emittedPairs = [];
+    const mapRecords = allNodes.length;
+
+    // --- Local In-Process Execution ---
+    if (executionMode === 'local') {
+      for (const node of allNodes) {
+        const clusterArr = Array.from(clusters.get(node) || [node]);
+        const neighborsArr = Array.from(adjMap.get(node) || []);
+
+        if (isAlternating) {
+          const emits = algo.map({
+            node,
+            cluster: clusterArr,
+            neighbors: neighborsArr,
+            roundType
+          }, orderContext);
+          for (const e of emits) emittedPairs.push(e);
+        } else {
+          const emits = algo.map({ node, cluster: clusterArr }, orderContext);
+          for (const e of emits) emittedPairs.push(e);
+        }
+      }
+    } else if (executionMode === 'distributed' && master) {
+      // --- Distributed Execution ---
       const mapInputs = allNodes.map(node => ({
         node,
-        cluster: Array.from(clusters.get(node) || [node])
+        cluster: Array.from(clusters.get(node) || [node]),
+        neighbors: Array.from(adjMap.get(node) || [])
       }));
 
       const chunkSize = Math.max(1, Math.ceil(mapInputs.length / numPartitions));
@@ -110,7 +139,8 @@ export async function runCCDriver({
             meta: {
               ccAlgorithm: algo.name,
               orderMode,
-              seed
+              seed,
+              roundType
             }
           }));
         }
@@ -119,13 +149,6 @@ export async function runCCDriver({
       const mapResults = await master.runStage(mapTasks, stageDelayMs);
       for (const res of mapResults.values()) {
         if (res.emits) emittedPairs.push(...res.emits);
-      }
-    } else {
-      // --- Local In-Process Execution ---
-      for (const node of allNodes) {
-        const clusterArr = Array.from(clusters.get(node) || [node]);
-        const emits = algo.map({ node, cluster: clusterArr }, orderContext);
-        for (const e of emits) emittedPairs.push(e);
       }
     }
 
@@ -138,8 +161,6 @@ export async function runCCDriver({
       const val = pair.value;
       const elemCount = Array.isArray(val) ? val.length : 1;
       shuffleElements += elemCount;
-
-      // Serialized size using standard JSON serializer
       const jsonStr = JSON.stringify(pair);
       shuffleBytes += Buffer.byteLength(jsonStr, 'utf-8');
 
@@ -175,7 +196,8 @@ export async function runCCDriver({
         meta: {
           ccAlgorithm: algo.name,
           orderMode,
-          seed
+          seed,
+          roundType
         }
       }));
 
@@ -188,7 +210,6 @@ export async function runCCDriver({
         }
       }
 
-      // Check changed nodes compared to previous round
       for (const node of allNodes) {
         const nextSet = nextClusters.get(node) || new Set([node]);
         const prevSet = clusters.get(node) || new Set([node]);
@@ -200,10 +221,19 @@ export async function runCCDriver({
       // Local Reduce
       for (const node of allNodes) {
         const values = keyToValues.get(node) || [];
-        const reduced = algo.reduce(node, values, orderContext);
-        const nextSet = new Set(reduced.cluster);
-        const prevSet = clusters.get(node) || new Set([node]);
+        let reduced;
 
+        if (isAlternating) {
+          reduced = algo.reduce(node, values, orderContext, roundType);
+        } else {
+          reduced = algo.reduce(node, values, orderContext);
+        }
+
+        // For Hma rounds, ensure node keeps itself
+        const nextSet = new Set(reduced.cluster);
+        nextSet.add(node);
+
+        const prevSet = clusters.get(node) || new Set([node]);
         if (nextSet.size !== prevSet.size || Array.from(nextSet).some(x => !prevSet.has(x))) {
           changedNodes++;
         }
@@ -212,16 +242,25 @@ export async function runCCDriver({
     }
 
     clusters = nextClusters;
-    if (changedNodes === 0) {
-      converged = true;
+
+    // Convergence check:
+    // For alternating, only check at end of a full 3-round cycle (Hcm round)
+    if (isAlternating) {
+      if (roundType === 'hcm' && changedNodes === 0) {
+        converged = true;
+      }
+    } else {
+      if (changedNodes === 0) {
+        converged = true;
+      }
     }
 
     const roundDurationSec = (performance.now() - roundStartTime) / 1000;
 
     // Diagnostic check for Hash-Greater-to-Min
     const elementsRatio = shuffleElements / Math.max(1, numNodes + numEdges);
-    if (algo.name === 'hash_greater_to_min' && elementsRatio > 2.0) {
-      console.warn(`[CC-DIAGNOSTIC] Hash-Greater-to-Min exceeded 2(|V|+|E|) in round ${round}: elements=${shuffleElements}, |V|+|E|=${numNodes + numEdges}, ratio=${elementsRatio.toFixed(3)}`);
+    if (algo.name === 'hash_greater_to_min' && roundType === 'hcm' && elementsRatio > 2.0) {
+      console.warn(`[CC-DIAGNOSTIC] Hash-Greater-to-Min Hcm round exceeded 2(|V|+|E|) in round ${round}: elements=${shuffleElements}, |V|+|E|=${numNodes + numEdges}, ratio=${elementsRatio.toFixed(3)}`);
     }
 
     const roundMetric = {
@@ -233,6 +272,7 @@ export async function runCCDriver({
       n_nodes: numNodes,
       n_edges: numEdges,
       round,
+      round_type: roundType,
       map_records: mapRecords,
       shuffle_elements: shuffleElements,
       shuffle_bytes: shuffleBytes,

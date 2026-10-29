@@ -69,18 +69,20 @@ export class TaskExecutor {
     if (meta?.ccAlgorithm) {
       const algo = resolveAlgorithm(meta.ccAlgorithm);
       const orderContext = new OrderContext(meta.orderMode || 'natural', meta.seed || 42);
+      const roundType = meta.roundType || 'htm';
 
       if (taskType === 'MAP') {
         const emits = [];
         for (const item of inputPartition) {
-          const mapped = algo.map(item, orderContext);
+          // Pass roundType into the record for the alternating scheme
+          const mapped = algo.map({ ...item, roundType }, orderContext);
           for (const m of mapped) emits.push(m);
         }
         return { emits };
       } else if (taskType === 'REDUCE') {
         const updatedClusters = [];
         for (const { key, values } of inputPartition) {
-          const res = algo.reduce(key, values, orderContext);
+          const res = algo.reduce(key, values, orderContext, roundType);
           updatedClusters.push({ node: res.node, cluster: res.cluster });
         }
         return { updatedClusters };
