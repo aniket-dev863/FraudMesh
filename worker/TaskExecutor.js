@@ -1,6 +1,8 @@
 import { ccMap, ccReduce } from '../fraud/connectedComponents.js';
 import { fraudReduce } from '../fraud/reducer.js';
 import { fraudMap } from '../fraud/mapper.js';
+import { resolveAlgorithm } from '../fraud/cc/driver.js';
+import { OrderContext } from '../fraud/cc/ordering.js';
 
 /**
  * Worker-side execution engine for assigned tasks.
@@ -64,6 +66,27 @@ export class TaskExecutor {
   }
 
   _executeFraudCC(taskType, inputPartition, meta) {
+    if (meta?.ccAlgorithm) {
+      const algo = resolveAlgorithm(meta.ccAlgorithm);
+      const orderContext = new OrderContext(meta.orderMode || 'natural', meta.seed || 42);
+
+      if (taskType === 'MAP') {
+        const emits = [];
+        for (const item of inputPartition) {
+          const mapped = algo.map(item, orderContext);
+          for (const m of mapped) emits.push(m);
+        }
+        return { emits };
+      } else if (taskType === 'REDUCE') {
+        const updatedClusters = [];
+        for (const { key, values } of inputPartition) {
+          const res = algo.reduce(key, values, orderContext);
+          updatedClusters.push({ node: res.node, cluster: res.cluster });
+        }
+        return { updatedClusters };
+      }
+    }
+
     if (taskType === 'MAP') {
       // inputPartition: array of { node, label, neighbors }
       const emits = [];

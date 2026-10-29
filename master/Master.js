@@ -11,6 +11,7 @@ import { Scheduler } from './Scheduler.js';
 import { ShuffleManager } from './ShuffleManager.js';
 import { SkewManager } from './SkewManager.js';
 import { SpeculationManager } from './SpeculationManager.js';
+import { runCCDriver } from '../fraud/cc/driver.js';
 
 export class Master {
   constructor({
@@ -21,10 +22,17 @@ export class Master {
     speculationMultiplier = parseFloat(process.env.SPECULATION_MULTIPLIER || '2.0'),
     skewEnabled = process.env.SKEW_ENABLED === 'true',
     skewThreshold = parseFloat(process.env.SKEW_THRESHOLD || '2.0'),
-    maxCcIterations = parseInt(process.env.MAX_CC_ITERATIONS || '100', 10)
+    maxCcIterations = parseInt(process.env.MAX_CC_ITERATIONS || '100', 10),
+    ccAlgorithm = process.env.CC_ALGORITHM || 'hash_to_min',
+    ccOrderMode = process.env.CC_ORDER_MODE || 'natural',
+    ccSeed = parseInt(process.env.CC_SEED || '42', 10)
   } = {}) {
     this.port = port;
     this.server = null;
+    this.maxCcIterations = maxCcIterations;
+    this.ccAlgorithm = ccAlgorithm;
+    this.ccOrderMode = ccOrderMode;
+    this.ccSeed = ccSeed;
 
     this.workerRegistry = new WorkerRegistry();
     this.taskManager = new TaskManager();
@@ -159,8 +167,8 @@ export class Master {
         }
         this.scheduler.schedulePendingTasks();
       case MessageType.JOB_START: {
-        const { jobType, csvPath, groundTruthPath, numPartitions, stageDelayMs } = payload || {};
-        console.log(`[MASTER] Received TCP request to start job: ${jobType}`);
+        const { jobType, csvPath, groundTruthPath, numPartitions, stageDelayMs, ccAlgorithm, orderMode, seed } = payload || {};
+        console.log(`[MASTER] Received TCP request to start job: ${jobType} (ccAlgorithm=${ccAlgorithm || this.ccAlgorithm})`);
         (async () => {
           try {
             let res;
@@ -171,7 +179,10 @@ export class Master {
                 transactionsCsvPath: csvPath || 'data/input/transactions.csv',
                 groundTruthJsonPath: groundTruthPath || 'fraud/expectedRings.json',
                 numPartitions: numPartitions || 4,
-                stageDelayMs: stageDelayMs || 0
+                stageDelayMs: stageDelayMs || 0,
+                ccAlgorithm,
+                orderMode,
+                seed
               });
             }
             socket.write(MessageFramer.frame(createMessage(MessageType.JOB_COMPLETE, { payload: res })));
@@ -289,7 +300,10 @@ export class Master {
     transactionsCsvPath,
     groundTruthJsonPath = 'fraud/expectedRings.json',
     numPartitions = 4,
-    stageDelayMs = 0
+    stageDelayMs = 0,
+    ccAlgorithm,
+    orderMode,
+    seed
   }) {
     this.jobActive = true;
     const startTime = Date.now();
@@ -355,83 +369,33 @@ export class Master {
       }
     }
 
-    // --- STAGE 2: ITERATIVE CONNECTED COMPONENTS (Hash-to-Min) ---
-    console.log(`[MASTER] [STAGE 2] Running Iterative Hash-to-Min Connected Components...`);
-    let labels = new Map();
-    for (const node of nodeNeighbors.keys()) {
-      labels.set(node, node);
-    }
+    // --- STAGE 2: ITERATIVE CONNECTED COMPONENTS ---
+    const activeAlgorithm = ccAlgorithm || this.ccAlgorithm || process.env.CC_ALGORITHM || 'hash_to_min';
+    const activeOrderMode = orderMode || this.ccOrderMode || process.env.CC_ORDER_MODE || 'natural';
+    const activeSeed = seed !== undefined ? seed : (this.ccSeed || 42);
 
-    let ccIteration = 0;
-    let ccConverged = false;
+    console.log(`[MASTER] [STAGE 2] Running Distributed ${activeAlgorithm.toUpperCase()} Connected Components (order=${activeOrderMode}, seed=${activeSeed})...`);
 
-    while (ccIteration < this.maxCcIterations && !ccConverged) {
-      ccIteration++;
-      console.log(`[MASTER] --- CC Round ${ccIteration} ---`);
+    const ccResult = await runCCDriver({
+      algorithm: activeAlgorithm,
+      orderMode: activeOrderMode,
+      seed: activeSeed,
+      graphFamily: 'fraud_transaction_graph',
+      nodes: Array.from(nodeNeighbors.keys()),
+      adjacency: nodeNeighbors,
+      executionMode: 'distributed',
+      master: this,
+      jobId,
+      numPartitions,
+      stageDelayMs,
+      maxRounds: this.maxCcIterations,
+      resultsJsonlPath: 'results/cc_rounds.jsonl',
+      recordMetrics: true
+    });
 
-      // Prepare Map items: { node, label, neighbors: [...] }
-      const nodesList = Array.from(nodeNeighbors.entries()).map(([node, nSet]) => ({
-        node,
-        label: labels.get(node),
-        neighbors: Array.from(nSet)
-      }));
-
-      const ccMapChunkSize = Math.max(1, Math.ceil(nodesList.length / numPartitions));
-      const ccMapTasks = [];
-      for (let i = 0; i < numPartitions; i++) {
-        const slice = nodesList.slice(i * ccMapChunkSize, (i + 1) * ccMapChunkSize);
-        if (slice.length > 0) {
-          ccMapTasks.push(new Task({
-            jobId,
-            taskId: `cc-map-r${ccIteration}-${String(i).padStart(4, '0')}`,
-            taskType: TaskType.MAP,
-            workload: 'fraud_cc',
-            inputPartition: slice
-          }));
-        }
-      }
-
-      const ccMapResults = await this.runStage(ccMapTasks, stageDelayMs);
-      const ccEmits = [];
-      for (const res of ccMapResults.values()) {
-        if (res.emits) ccEmits.push(...res.emits);
-      }
-
-      // Shuffle & Group emitted labels by node
-      const ccPartitions = ShuffleManager.shuffleAndGroup(ccEmits, numPartitions);
-      const { balancedPartitions } = this.skewManager.inspectAndBalance(ccPartitions);
-
-      // Meta carries currentLabels
-      const currentLabelsObj = Object.fromEntries(labels);
-      const ccReduceTasks = balancedPartitions.map((p, idx) => new Task({
-        jobId,
-        taskId: `cc-reduce-r${ccIteration}-${String(idx).padStart(4, '0')}`,
-        taskType: TaskType.REDUCE,
-        workload: 'fraud_cc',
-        inputPartition: p.items,
-        meta: { currentLabels: currentLabelsObj }
-      }));
-
-      const ccReduceResults = await this.runStage(ccReduceTasks, stageDelayMs);
-      let anyChanged = false;
-      for (const res of ccReduceResults.values()) {
-        if (res.anyChanged) anyChanged = true;
-        for (const item of (res.updatedNodes || [])) {
-          labels.set(item.node, item.label);
-        }
-      }
-
-      if (!anyChanged) {
-        ccConverged = true;
-        console.log(`[MASTER] Connected components CONVERGED after ${ccIteration} iterations`);
-      }
-    }
-
-    if (!ccConverged) {
-      console.error('[MASTER] JOB FAILED: connected components did not converge within MAX_CC_ITERATIONS');
-      this.jobActive = false;
-      throw new Error('Connected components did not converge');
-    }
+    const labels = ccResult.nodeToComponent;
+    const ccIteration = ccResult.rounds;
+    console.log(`[MASTER] Connected components CONVERGED after ${ccIteration} iterations using ${activeAlgorithm}`);
 
     // --- STAGE 3: LOCAL SCC & FRAUD RING MINING ---
     console.log(`[MASTER] [STAGE 3] Running Distributed Component SCC / Cycle Detection...`);
