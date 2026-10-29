@@ -91,7 +91,15 @@ docker compose logs master
 
 ### Running Fraud Mining Job
 ```bash
+# Default: Hash-to-Min connected components
 MASTER_PORT=5050 node scripts/submitJob.js fraud
+
+# Choose connected-components algorithm:
+MASTER_PORT=5050 node scripts/submitJob.js fraud --cc-algorithm hash_to_min
+MASTER_PORT=5050 node scripts/submitJob.js fraud --cc-algorithm hash_greater_to_min
+
+# With seeded ordering:
+MASTER_PORT=5050 node scripts/submitJob.js fraud --cc-algorithm hash_greater_to_min --order-mode seeded --seed 42
 ```
 
 ### Demonstrating Fault Tolerance
@@ -110,9 +118,31 @@ MASTER_PORT=5050 node scripts/submitJob.js fraud
 
 ---
 
-## 4. Benchmark Execution
+## 4. Benchmark & CC Algorithm Comparison
+
+### System Benchmarks (Fault Tolerance, Skew, Speculation)
 Run the automated multi-configuration benchmark suite:
 ```bash
 node benchmarks/runBenchmark.js
 ```
-Results will be output to `benchmarks/results/results.csv`.
+Results are saved to `benchmarks/results/results.csv`.
+
+### Connected-Components Comparison Benchmark (Review 3)
+Run the full comparative study across Path, Sparse ER, Power-Law, and Fraud graphs:
+```bash
+# Run benchmark sweeps and generate plots
+python3 benchmarks/cc_compare.py
+# (or directly via Node.js: node benchmarks/cc_compare.js)
+```
+
+Outputs generated:
+- Data table: [`results/cc_comparison.csv`](results/cc_comparison.csv)
+- Per-round NDJSON instrumentation: [`results/cc_rounds.jsonl`](results/cc_rounds.jsonl)
+- 4-Worker Cluster Verification: [`results/cluster_runs.json`](results/cluster_runs.json)
+- Full Empirical Report: [`results/CC_COMPARISON.md`](results/CC_COMPARISON.md)
+- Algorithmic Design & Proof Specs: [`docs/cc_algorithms.md`](docs/cc_algorithms.md)
+- Comparison Plots:
+  - `results/rounds_vs_n_path.png` (Rounds vs. $n$ with $\log_2 n$ and $3\log_2 n$ bounds)
+  - `results/shuffle_bytes_per_round.png` (Per-round intermediate communication)
+  - `results/total_shuffle_and_rounds.png` (Total communication & rounds by graph family)
+  - `results/peak_reducer_values.png` (Reducer skew pressure comparison)
